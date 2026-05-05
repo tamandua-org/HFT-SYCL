@@ -8,6 +8,12 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <limits.h>
+
+
+using namespace std;
+
+
 
 void readAsset(std::vector<float> &prices, const std::string &filename) {
   std::ifstream file(filename);
@@ -47,7 +53,7 @@ std::vector<Tick> buildTicks(std::array<std::vector<float>, N_STOCKS> &assets,
   for (int t = 0; t < numTicks; t++) {
     Tick tick;
 
-    for (size_t a = 0; a < N_STOCKS; a++) {
+    for (std::size_t a = 0; a < N_STOCKS; a++) {
       tick.prices[a] = assets[a][t];
     }
 
