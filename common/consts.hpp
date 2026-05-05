@@ -1,0 +1,1 @@
+constexpr uint32_t N_STOCKS = 16;
