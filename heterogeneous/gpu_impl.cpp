@@ -9,7 +9,7 @@
 #include <sycl/sycl.hpp>
 
 static void warmup_cpu(const std::vector<Tick>& ticks,
-                       std::vector<FlatPairInfo>& flat)
+                       std::vector<PairInfo>& flat)
 {
     int idx = 0;
     for (uint32_t i = 0; i < N_STOCKS; ++i) {
@@ -39,7 +39,7 @@ static void warmup_cpu(const std::vector<Tick>& ticks,
             }
             varSpread /= WINDOW_SIZE;
 
-            FlatPairInfo& p = flat[idx];
+            PairInfo& p = flat[idx];
             p.meanI = meanI;        p.meanJ = meanJ;
             p.varJ  = varJ;         p.covIJ = covIJ;
             p.beta  = beta;
@@ -64,7 +64,7 @@ constexpr uint32_t CHUNK_SIZE       = (CHUNK_RAW < 32)  ? 32
 // ---- Kernel ---------------------------------------------------------------
 static sycl::event z_score_kernel(sycl::queue& Q,
                                   const float* d_ticks,    // tick-major: tick*N_STOCKS + stock
-                                  FlatPairInfo* d_pairs,
+                                  PairInfo* d_pairs,
                                   int n_ticks)
 {
     const size_t n_groups = (N_PAIRS + WG_SIZE - 1) / WG_SIZE;
@@ -83,7 +83,7 @@ static sycl::event z_score_kernel(sycl::queue& Q,
                 const bool active  = gid < N_PAIRS;
 
                 // Estado del par en registros (solo si el hilo es activo)
-                FlatPairInfo p;
+                PairInfo p;
                 if (active) p = d_pairs[gid];
 
                 for (int offset = 0; offset < n_ticks; offset += (int)CHUNK_SIZE) {
@@ -153,19 +153,19 @@ void runTicks(const std::vector<Tick> &ticks) {
         // 1) Buffers en device
         float*         d_ticks = sycl::malloc_device<float>(
                                     static_cast<size_t>(total) * N_STOCKS, Q);
-        FlatPairInfo*  d_pairs = sycl::malloc_device<FlatPairInfo>(N_PAIRS, Q);
+        PairInfo*  d_pairs = sycl::malloc_device<PairInfo>(N_PAIRS, Q);
 
         // 2) Una sola copia de TODOS los ticks (Tick ya es tick-major)
         auto copy_ticks = Q.memcpy(d_ticks, ticks.data(),
                                 static_cast<size_t>(total) * sizeof(Tick));
 
         // 3) Warm-up en CPU en paralelo a la copia
-        std::vector<FlatPairInfo> h_pairs(N_PAIRS);
+        std::vector<PairInfo> h_pairs(N_PAIRS);
         warmup_cpu(ticks, h_pairs);
 
         // 4) Subir estado inicial de los pares y esperar a que los ticks estén
         auto copy_pairs = Q.memcpy(d_pairs, h_pairs.data(),
-                                N_PAIRS * sizeof(FlatPairInfo));
+                                N_PAIRS * sizeof(PairInfo));
         copy_ticks.wait();
         copy_pairs.wait();
 
@@ -179,7 +179,7 @@ void runTicks(const std::vector<Tick> &ticks) {
         }
 
         // 6) Bajar resultados
-        Q.memcpy(h_pairs.data(), d_pairs, N_PAIRS * sizeof(FlatPairInfo)).wait();
+        Q.memcpy(h_pairs.data(), d_pairs, N_PAIRS * sizeof(PairInfo)).wait();
 
         sycl::free(d_ticks, Q);
         sycl::free(d_pairs, Q);
