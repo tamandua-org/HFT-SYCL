@@ -1,12 +1,50 @@
 #include "consts.hpp"
 #include "pair_info.hpp"
 #include "tick.hpp"
+#include "run.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <vector>
 #include <sycl/sycl.hpp>
+
+
+void constructFinalPositionFromAllInputs(
+    const std::vector<PairInfo> &h_pairs,
+    std::array<uint8_t, N_STOCKS> &positions) {
+
+    std::array<std::array<int, 3>, N_STOCKS> sumPositions{};
+
+    for (const auto pair: h_pairs){
+        int i = pair.i;
+        int j = pair.j;
+
+        if(pair.position == BUY){
+            sumPositions[i][BUY]++;
+            sumPositions[j][SELL]++;
+        }
+        else if(pair.position == SELL){
+            sumPositions[j][BUY]++;
+            sumPositions[i][SELL]++;
+        }
+        else{
+            sumPositions[j][HOLD]++;
+            sumPositions[i][HOLD]++;
+        }
+    }
+
+    for (int i = 0; i < N_STOCKS; ++i){
+        if (sumPositions[i][BUY] > N_STOCKS / 4)
+            positions[i] = BUY;
+        else if (sumPositions[i][SELL] > N_STOCKS / 4)
+            positions[i] = SELL;
+        else
+            positions[i] = HOLD;
+    }
+
+ 
+}
 
 static void warmup_cpu(const std::vector<Tick>& ticks,
                        std::vector<PairInfo>& flat)
@@ -143,9 +181,9 @@ static sycl::event z_score_kernel(sycl::queue& Q,
     });
 }
 
-void runTicks(const std::vector<Tick> &ticks) {
+std::array<uint8_t, N_STOCKS> runTicks(const std::vector<Tick> &ticks) {
     const int total = static_cast<int>(ticks.size());
-        if (total < (int)WINDOW_SIZE) return;
+        if (total < (int)WINDOW_SIZE) return {};
 
         sycl::queue Q(sycl::gpu_selector_v,
                     sycl::property::queue::in_order{});
@@ -186,7 +224,11 @@ void runTicks(const std::vector<Tick> &ticks) {
 
         // h_pairs queda con el estado final; si necesitas el array 2D PairInfo,
         // reconviértelo aquí leyendo p.i, p.j de cada elemento.
-    
+
+        std::array<uint8_t, N_STOCKS> positions;
+        constructFinalPositionFromAllInputs(h_pairs, positions);
+
+        return positions;
 
 }
 
