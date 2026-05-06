@@ -10,11 +10,6 @@
 #include <vector>
 #include <limits.h>
 
-
-using namespace std;
-
-
-
 void readAsset(std::vector<float> &prices, const std::string &filename) {
   std::ifstream file(filename);
 
@@ -69,5 +64,7 @@ int main() {
 
   auto ticks = buildTicks(assets, minTicks);
 
+  common::runTicks(ticks);
+  
   return 0;
 }
