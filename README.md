@@ -8,7 +8,7 @@ Habría que usar Intel oneAPI DPC++ compiler combiando con un Xilinx/AMD FPGA Su
 
 Para la implementación, el ARM de la pynq no sería capaz de compilarlo, por lo que nos haría falta configurar un cross-compiler.
 
-
+TESTEO
 
 
 
