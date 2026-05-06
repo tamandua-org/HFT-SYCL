@@ -46,7 +46,7 @@ void constructFinalPositionFromAllInputs(
 std::array<uint8_t, N_STOCKS> runTicks(const std::vector<Tick> &ticks) {
   std::array<std::array<PairInfo, N_STOCKS>, N_STOCKS> pairs;
   std::array<uint8_t, N_STOCKS> positions;
-
+  uint32_t tickCount = 0;
   for (const Tick &t : ticks) {
     const auto &prices = t.prices;
 
@@ -58,10 +58,8 @@ std::array<uint8_t, N_STOCKS> runTicks(const std::vector<Tick> &ticks) {
         float x_i = prices[i];
         float x_j = prices[j];
 
-        pair.tickCount++;
-
-        if (pair.warmedup == false && pair.tickCount <= WINDOW_SIZE) {
-          float n = pair.tickCount;
+        if (tickCount <= WINDOW_SIZE) { //warmup
+          float n = tickCount;
 
           // Media Welford
           float oldMeanI = pair.meanI;
@@ -74,13 +72,12 @@ std::array<uint8_t, N_STOCKS> runTicks(const std::vector<Tick> &ticks) {
           pair.varJ += (x_j - oldMeanJ) * (x_j - pair.meanJ);
           pair.covIJ += (x_i - oldMeanI) * (x_j - pair.meanJ);
 
-          if (pair.tickCount < WINDOW_SIZE)
+          if (tickCount < WINDOW_SIZE)
             continue;
 
           // Normalizar antes de salir del warmup
           pair.varJ /= n;
           pair.covIJ /= n;
-          pair.warmedup = true;
         } else { // post warmup
           float delta_i = x_i - pair.meanI;
           float delta_j = x_j - pair.meanJ;
@@ -113,8 +110,10 @@ std::array<uint8_t, N_STOCKS> runTicks(const std::vector<Tick> &ticks) {
     // segundo paso: En base a las relaciones entre los N stocks, tomamos para
     // cada uno la decision de que posicion tomamos
     constructFinalPositionFromAllInputs(pairs, positions);
+
+    tickCount++;
   }
 
   return positions;
 }
- // namespace common
+

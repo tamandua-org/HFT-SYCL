@@ -1,14 +1,14 @@
 import pandas as pd
 import os
 
-INPUT_FILE = "stockData20202024.csv"
+INPUT_FILE = "./inputGeneration/stockData20202024.csv"
 OUTPUT_DIR = "."
 
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     # Load CSV
-    df = pd.read_csv(INPUT_FILE)
+    df = pd.read_csv(INPUT_FILE, thousands=",")
 
     # Drop unnamed index column if it exists
     if df.columns[0].startswith("Unnamed"):
