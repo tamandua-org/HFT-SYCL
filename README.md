@@ -6,7 +6,7 @@ En principio si sería posible utilizar oneAPI FPGA para la PYNQ-Z2 siguiendo lo
 
 Habría que usar Intel oneAPI DPC++ compiler combiando con un Xilinx/AMD FPGA Support Package (mirar https://github.com/codeplaysoftware/deploy-oneapi). Esto último se trata de unos plugins que nos permitiría correr onAPI en NVIDA (CUDA) y hardware AMD.
 
-
+Para la implementación, el ARM de la pynq no sería capaz de compilarlo, por lo que nos haría falta configurar un cross-compiler.
 
 
 
