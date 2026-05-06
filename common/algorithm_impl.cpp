@@ -23,14 +23,40 @@ void runTicks(const std::vector<Tick> &ticks) {
         float x_i = prices[i];
         float x_j = prices[j];
 
-        float delta_i = x_i - pair.meanI;
-        float delta_j = x_j - pair.meanJ;
+        pair.tickCount++;
+        
+        if (pair.warmedup == false && pair.tickCount <= WINDOW_SIZE){
+          float n = pair.tickCount;
 
-        pair.meanI += ALPHA * delta_i;
-        pair.meanJ += ALPHA * delta_j;
+          // Media Welford
+          float oldMeanI = pair.meanI;
+          float oldMeanJ = pair.meanJ;
+          pair.meanI += (x_i - pair.meanI) / n;
+          pair.meanJ += (x_j - pair.meanJ) / n;
 
-        pair.varJ = (1.0f - ALPHA) * pair.varJ + ALPHA * delta_j * delta_j;
-        pair.covIJ = (1.0f - ALPHA) * pair.covIJ + ALPHA * delta_i * delta_j;
+          // Varianza y covarianza de Welford exactas
+          // usa (x - oldMean) * (x - newMean) — fórmula online exacta
+          pair.varJ  += (x_j - oldMeanJ) * (x_j - pair.meanJ);
+          pair.covIJ += (x_i - oldMeanI) * (x_j - pair.meanJ);
+
+          if (pair.tickCount < WINDOW_SIZE) continue;
+
+          // Normalizar antes de salir del warmup
+          pair.varJ  /= n;
+          pair.covIJ /= n;
+          pair.warmedup = true;
+        }
+        else{
+          float delta_i = x_i - pair.meanI;
+          float delta_j = x_j - pair.meanJ;
+          pair.meanI += ALPHA * delta_i;
+          pair.meanJ += ALPHA * delta_j;
+
+          pair.varJ = (1.0f - ALPHA) * pair.varJ + ALPHA * delta_j * delta_j;
+          pair.covIJ = (1.0f - ALPHA) * pair.covIJ + ALPHA * delta_i * delta_j;
+        }
+
+        
 
         float varJ_safe = std::max(pair.varJ, EPSILON);
         pair.beta = pair.covIJ / varJ_safe;
