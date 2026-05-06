@@ -8,7 +8,6 @@
 #include <iostream>
 #include <vector>
 
-namespace common {
 void choosePosition(PairInfo &pair, const float z) {
   if (pair.position == HOLD) {
     if (z > THRESHOLD_ENTRY)
@@ -118,5 +117,4 @@ std::array<uint8_t, N_STOCKS> runTicks(const std::vector<Tick> &ticks) {
 
   return positions;
 }
-
-} // namespace common
+ // namespace common
