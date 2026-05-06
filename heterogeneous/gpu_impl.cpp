@@ -1,15 +1,12 @@
-#include "asset.hpp"
-
+#include "consts.hpp"
 #include "pair_info.hpp"
 #include "tick.hpp"
 
-#include <array>
+#include <algorithm>
 #include <cmath>
-#include <iostream>
+#include <cstring>
 #include <vector>
-
 #include <sycl/sycl.hpp>
-
 
 static void warmup_cpu(const std::vector<Tick>& ticks,
                        std::vector<FlatPairInfo>& flat)
