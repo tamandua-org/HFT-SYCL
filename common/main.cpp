@@ -21,7 +21,7 @@ void readAsset(std::vector<float> &prices, const std::string &filename) {
 }
 
 void loadAllAssets(std::array<std::vector<float>, N_STOCKS> &assets,
-                  std::array<std::string, N_STOCKS> &stockNames) {
+                   std::array<std::string, N_STOCKS> &stockNames) {
   std::string folder = "../inputs"; // importante: la llamada a esta funcion hay
                                     // que hacerla desde un directorio de build
                                     // (o cualquier otra subcarpeta)
@@ -35,7 +35,8 @@ void loadAllAssets(std::array<std::vector<float>, N_STOCKS> &assets,
 
       std::vector<float> prices;
       readAsset(prices, path);
-      stockNames[i] = path.substr(folder.length() + 1, path.length() - folder.length() + 1);
+      stockNames[i] =
+          path.substr(folder.length() + 1, path.length() - folder.length() + 1);
       assets[i++] = prices;
 
       minAssetCount = std::min(minAssetCount, static_cast<int>(prices.size()));
@@ -48,7 +49,6 @@ void loadAllAssets(std::array<std::vector<float>, N_STOCKS> &assets,
   for (auto &stock : assets) {
     stock.resize(minAssetCount);
   }
-
 }
 
 std::vector<Tick> buildTicks(std::array<std::vector<float>, N_STOCKS> &assets,
@@ -79,7 +79,7 @@ int main() {
   auto positions = runTicks(ticks);
 
   for (const auto &[stock, pos] : std::views::zip(stockNames, positions)) {
-    std::cout << stock << " " << pos << '\n';
+    std::cout << stock << " " << (int)pos << '\n';
   }
 
   return 0;

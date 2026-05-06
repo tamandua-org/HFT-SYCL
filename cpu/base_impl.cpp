@@ -24,19 +24,32 @@ void choosePosition(PairInfo &pair, const float z) {
 }
 
 void constructFinalPositionFromAllInputs(
-    const std::array<std::array<PairInfo, N_STOCKS>, N_STOCKS> &pairs,
+    std::array<std::array<PairInfo, N_STOCKS>, N_STOCKS> &pairs,
     std::array<uint8_t, N_STOCKS> &positions) {
-  for (int i = 0; i < N_STOCKS; i++) {
-    int sumPositions[3];
-    auto &stockPositions = pairs[i];
 
-    for (int j = 0; j < N_STOCKS; j++) {
-      sumPositions[stockPositions[j].position]++;
+  for (int i = 0; i < N_STOCKS; i++) {
+
+    int sumPositions[3]{};
+
+    // reverse symmetry to account whatever we choose to sell the other we buy and viceversa
+    for (int j = i + 1; j < N_STOCKS; j++) {
+      sumPositions[pairs[i][j].position]++;
+
+      if (pairs[i][j].position == BUY) {
+        pairs[j][i].position = SELL;
+      } else if (pairs[i][j].position == SELL) {
+        pairs[j][i].position = BUY;
+      } else pairs[j][i].position = HOLD;
+
     }
 
-    if (sumPositions[BUY] > N_STOCKS / 2)
+    for (int j = 0; j < i; j++) {
+      sumPositions[pairs[j][i].position]++;
+    }
+    
+    if (sumPositions[BUY] > N_STOCKS / 4)
       positions[i] = BUY;
-    else if (sumPositions[SELL] > N_STOCKS / 2)
+    else if (sumPositions[SELL] > N_STOCKS / 4)
       positions[i] = SELL;
     else
       positions[i] = HOLD;
@@ -44,9 +57,10 @@ void constructFinalPositionFromAllInputs(
 }
 
 std::array<uint8_t, N_STOCKS> runTicks(const std::vector<Tick> &ticks) {
-  std::array<std::array<PairInfo, N_STOCKS>, N_STOCKS> pairs;
-  std::array<uint8_t, N_STOCKS> positions;
-  uint32_t tickCount = 0;
+  std::array<std::array<PairInfo, N_STOCKS>, N_STOCKS> pairs{};
+  std::array<uint8_t, N_STOCKS> positions{};
+
+  uint32_t tickCount = 1;
   for (const Tick &t : ticks) {
     const auto &prices = t.prices;
 
