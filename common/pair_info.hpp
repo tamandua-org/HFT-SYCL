@@ -9,4 +9,6 @@ struct PairInfo {
     float beta  = 0.0f;
     float meanSpread = 0.0f, varSpread = 0.0f;
     int8_t position = HOLD;
+
+    uint16_t i = 0, j = 0;
 };

@@ -12,6 +12,6 @@ target_compile_options(sycl_impl PRIVATE
     -O2
 )
 
-target_link_options(sycl_impl PRIVATE
+target_link_options(sycl_impl PUBLIC
     -fsycl
 )
