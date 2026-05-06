@@ -390,19 +390,5 @@ void runTicks(const std::vector<Tick> &ticks) {
     sycl::free(shared_ticks, Q);
     sycl::free(shared_pairs, Q);
 
-
-
-
-void runTicks(const std::vector<Tick> &ticks) {
-    //Implementación en GPU
-
-    //1. Convertir la matriz de ticks por stock a stock por asset
-
-    //2. Construir ventana inicial
-
-    //3. Analizar los ticks nuevos
-
-
-
-
 }
+
