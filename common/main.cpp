@@ -1,4 +1,4 @@
-#include "algorithm_impl.cpp"
+#include "run.hpp"
 #include "tick.hpp"
 
 #include <algorithm>
@@ -6,9 +6,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits.h>
+#include <ranges>
 #include <string>
 #include <vector>
-#include <limits.h>
 
 void readAsset(std::vector<float> &prices, const std::string &filename) {
   std::ifstream file(filename);
@@ -42,6 +43,7 @@ int loadAllAssets(std::array<std::vector<float>, N_STOCKS> &assets) {
 }
 
 std::vector<Tick> buildTicks(std::array<std::vector<float>, N_STOCKS> &assets,
+                             std::array<std::string, N_STOCKS> &stockNames,
                              int numTicks) {
   std::vector<Tick> ticks;
 
@@ -60,11 +62,16 @@ std::vector<Tick> buildTicks(std::array<std::vector<float>, N_STOCKS> &assets,
 
 int main() {
   std::array<std::vector<float>, N_STOCKS> assets;
+  std::array<std::string, N_STOCKS> stockNames;
+
   int minTicks = loadAllAssets(assets);
 
-  auto ticks = buildTicks(assets, minTicks);
+  auto ticks = buildTicks(assets, stockNames, minTicks);
 
-  common::runTicks(ticks);
-  
+  auto positions = runTicks(ticks);
+  for (const auto &[stock, pos] : std::views::zip(stockNames, positions)) {
+    std::cout << stock << " " << pos;
+  }
+
   return 0;
 }
