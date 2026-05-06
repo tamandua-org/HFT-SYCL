@@ -1,6 +1,7 @@
 #include <stdint.h>
 
 constexpr uint32_t N_STOCKS = 16;
+constexpr uint32_t N_PAIRS  = N_STOCKS * (N_STOCKS - 1) / 2; // 4.950
 constexpr uint32_t WINDOW_SIZE = 32;
 constexpr uint32_t N_TICKS = 256;
 
