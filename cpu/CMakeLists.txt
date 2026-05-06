@@ -7,5 +7,5 @@ target_include_directories(cpu_impl PUBLIC
 )
 
 target_compile_options(cpu_impl PRIVATE
-    -O2
+    -O0
 )
