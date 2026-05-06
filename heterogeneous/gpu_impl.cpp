@@ -10,385 +10,186 @@
 
 #include <sycl/sycl.hpp>
 
-void convert(const std::vector<Tick> &ticks, std::array<Asset, N_STOCKS> &assets, int start, int size){
 
-    int t = start;
-    while (t < start + size){
-        const auto &prices = ticks[t].prices;
-        for (int i = 0; i < N_STOCKS; i++) {
-            assets[i].ticks[t] = prices[i];
-        }
-        ++t;
-    }
-}
-
-void convert(const std::vector<Tick>& ticks, float* h_ticks, int start, int size) {
-    int t = start;
-    for (int k = 0; k < size; ++k) {
-        const auto& prices = ticks[t].prices;
-        for (int i = 0; i < N_STOCKS; i++) {
-            h_ticks[i * N_TICKS + k] = prices[i];
-        }
-        ++t;
-    }
-}
-
-void flatten_pairs(
-    const std::array<std::array<PairInfo, N_STOCKS>, N_STOCKS>& pairs,
-    FlatPairInfo* h_pairs)
+static void warmup_cpu(const std::vector<Tick>& ticks,
+                       std::vector<FlatPairInfo>& flat)
 {
     int idx = 0;
-    for (int i = 0; i < N_STOCKS; ++i)
-        for (int j = i + 1; j < N_STOCKS; ++j) {
-            const PairInfo& p = pairs[i][j];
-            h_pairs[idx++] = {
-                p.meanI, p.meanJ, p.varJ, p.covIJ,
-                p.meanSpread, p.varSpread, p.beta,
-                p.position, i, j
-            };
+    for (uint32_t i = 0; i < N_STOCKS; ++i) {
+        for (uint32_t j = i + 1; j < N_STOCKS; ++j, ++idx) {
+            // Pasada 1: meanI, meanJ, varJ, covIJ con Welford
+            float meanI = 0.f, meanJ = 0.f, varJ = 0.f, covIJ = 0.f;
+            for (uint32_t w = 0; w < WINDOW_SIZE; ++w) {
+                const float xi = ticks[w].prices[i];
+                const float xj = ticks[w].prices[j];
+                const float oldI = meanI, oldJ = meanJ;
+                meanI += (xi - meanI) / (w + 1);
+                meanJ += (xj - meanJ) / (w + 1);
+                varJ  += (xj - oldJ) * (xj - meanJ);
+                covIJ += (xi - oldI) * (xj - meanJ);
+            }
+            varJ  /= WINDOW_SIZE;
+            covIJ /= WINDOW_SIZE;
+            const float beta = covIJ / std::max(varJ, EPSILON);
+
+            // Pasada 2: meanSpread, varSpread con el beta recién calculado
+            float meanSpread = 0.f, varSpread = 0.f;
+            for (uint32_t w = 0; w < WINDOW_SIZE; ++w) {
+                const float spread = ticks[w].prices[i] - beta * ticks[w].prices[j];
+                const float oldM = meanSpread;
+                meanSpread += (spread - meanSpread) / (w + 1);
+                varSpread  += (spread - oldM) * (spread - meanSpread);
+            }
+            varSpread /= WINDOW_SIZE;
+
+            FlatPairInfo& p = flat[idx];
+            p.meanI = meanI;        p.meanJ = meanJ;
+            p.varJ  = varJ;         p.covIJ = covIJ;
+            p.beta  = beta;
+            p.meanSpread = meanSpread;  p.varSpread = varSpread;
+            p.i = static_cast<uint16_t>(i);
+            p.j = static_cast<uint16_t>(j);
+            p.position = HOLD;
         }
+    }
 }
 
-void unflatten_pairs(
-    const FlatPairInfo* h_pairs,
-    std::array<std::array<PairInfo, N_STOCKS>, N_STOCKS>& pairs)
+
+// ---- Parámetros del kernel ------------------------------------------------
+constexpr uint32_t WG_SIZE          = 128;
+constexpr uint32_t SLM_TARGET_BYTES = 32u * 1024u;          // headroom para casi cualquier GPU
+constexpr uint32_t CHUNK_RAW        = SLM_TARGET_BYTES / (N_STOCKS * sizeof(float));
+constexpr uint32_t CHUNK_SIZE       = (CHUNK_RAW < 32)  ? 32
+                                    : (CHUNK_RAW > 512) ? 512
+                                                        : CHUNK_RAW;
+
+
+// ---- Kernel ---------------------------------------------------------------
+static sycl::event z_score_kernel(sycl::queue& Q,
+                                  const float* d_ticks,    // tick-major: tick*N_STOCKS + stock
+                                  FlatPairInfo* d_pairs,
+                                  int n_ticks)
 {
-    for (int idx = 0; idx < N_PAIRS; ++idx) {
-        const FlatPairInfo& fp = h_pairs[idx];
-        PairInfo& p = pairs[fp.i][fp.j];
-        p.meanI      = fp.meanI;
-        p.meanJ      = fp.meanJ;
-        p.varJ       = fp.varJ;
-        p.covIJ      = fp.covIJ;
-        p.meanSpread = fp.meanSpread;
-        p.varSpread  = fp.varSpread;
-        p.beta       = fp.beta;
-        p.position   = fp.position;
-    }
-}
+    const size_t n_groups = (N_PAIRS + WG_SIZE - 1) / WG_SIZE;
+    const sycl::range<1> global_size{ n_groups * WG_SIZE };
+    const sycl::range<1> local_size { WG_SIZE };
 
-void check_warmup_window(const std::array<Asset, N_STOCKS> assets, 
-    std::array<std::array<PairInfo, N_STOCKS>, N_STOCKS> &pairs)
-{   
-    for (int i = 0; i < N_STOCKS; ++i){
-        for (int j = i + 1; j < N_STOCKS; ++j){
-            PairInfo &pair = pairs[i][j];
-            for (int w = 0; w < WINDOW_SIZE; ++w){
-                float x_i = assets[i].ticks[w];
-                float x_j = assets[j].ticks[w];
+    return Q.submit([&](sycl::handler& cgh) {
 
-                // Media Welford
-                float oldMeanI = pair.meanI;
-                float oldMeanJ = pair.meanJ;
-                pair.meanI += (x_i - pair.meanI) / (w + 1);
-                pair.meanJ += (x_j - pair.meanJ) / (w + 1);
+        // Tile tick-major de CHUNK_SIZE ticks × N_STOCKS stocks
+        sycl::local_accessor<float, 1> tile(sycl::range<1>(CHUNK_SIZE * N_STOCKS), cgh);
 
-                // Varianza y covarianza de Welford exactas
-                // usa (x - oldMean) * (x - newMean) — fórmula online exacta
-                pair.varJ  += (x_j - oldMeanJ) * (x_j - pair.meanJ);
-                pair.covIJ += (x_i - oldMeanI) * (x_j - pair.meanJ);
-            }
-            pair.varJ  /= WINDOW_SIZE;
-            pair.covIJ /= WINDOW_SIZE;
+        cgh.parallel_for(sycl::nd_range<1>(global_size, local_size),
+            [=](sycl::nd_item<1> it) {
+                const uint32_t lid = it.get_local_id(0);
+                const uint32_t gid = it.get_global_id(0);
+                const bool active  = gid < N_PAIRS;
 
-            float varJ_safe = std::max(pair.varJ, EPSILON);
-            pair.beta = pair.covIJ / varJ_safe;
-        }
-    }
+                // Estado del par en registros (solo si el hilo es activo)
+                FlatPairInfo p;
+                if (active) p = d_pairs[gid];
 
-}
+                for (int offset = 0; offset < n_ticks; offset += (int)CHUNK_SIZE) {
+                    const int chunk = sycl::min((int)CHUNK_SIZE, n_ticks - offset);
+                    const int total = chunk * (int)N_STOCKS;
 
-void z_score_batch(const std::array<Asset, N_STOCKS> assets,
-std::array<std::array<PairInfo, N_STOCKS>, N_STOCKS> &pairs, int batch_size)
-{
-    for (int i = 0; i < N_STOCKS; ++i){
-        for (int j = i + 1; j < N_STOCKS; ++j){
-            PairInfo &pair = pairs[i][j];
-            for (int k = 0; k < batch_size; ++k){
-                float x_i = assets[i].ticks[k];
-                float x_j = assets[j].ticks[k];
-
-                float delta_i = x_i - pair.meanI;
-                float delta_j = x_j - pair.meanJ;
-                pair.meanI += ALPHA * delta_i;
-                pair.meanJ += ALPHA * delta_j;
-
-                pair.varJ = (1.0f - ALPHA) * pair.varJ + ALPHA * delta_j * delta_j;
-                pair.covIJ = (1.0f - ALPHA) * pair.covIJ + ALPHA * delta_i * delta_j;
-
-
-                float varJ_safe = std::max(pair.varJ, EPSILON);
-                pair.beta = pair.covIJ / varJ_safe;
-
-                float spread = x_i - pair.beta * x_j;
-
-                float delta_s = spread - pair.meanSpread;
-
-                pair.meanSpread += ALPHA * delta_s;
-                pair.varSpread =
-                    (1 - ALPHA) * pair.varSpread + ALPHA * delta_s * delta_s;
-
-                float stddev = std::sqrt(std::max(pair.varSpread, EPSILON));
-
-                float z = delta_s / stddev;
-
-
-                if (pair.position == HOLD) {
-                if (z > THRESHOLD_ENTRY)
-                    pair.position = SELL;
-                else if (z < -THRESHOLD_ENTRY)
-                    pair.position = BUY;
-                } else if (pair.position == BUY) {
-                if (z > -THRESHOLD_EXIT)
-                    pair.position = HOLD;
-                } else if (pair.position == SELL) {
-                if (z < THRESHOLD_EXIT)
-                    pair.position = HOLD;
-                }
-            }
-        }
-    }
-}
-
-/* void z_score_kernel(sycl::queue& Q, const float* d_ticks, FlatPairInfo* d_pairs, int batch_size) {
-    // N_PAIRS es 120 (16 * 15 / 2). 
-    // Es una buena práctica en GPU que el tamaño del grupo de trabajo sea múltiplo de 32.
-    constexpr int WG_SIZE = 128; 
-    
-    sycl::range<1> global_size{WG_SIZE};
-    sycl::range<1> local_size{WG_SIZE};
-
-    Q.submit([&](sycl::handler& cgh) {
-        
-        // 1. Declarar la memoria local (compartida por todos los hilos del work-group)
-        // Tamaño necesario: N_STOCKS * batch_size floats
-        sycl::local_accessor<float, 1> local_ticks(sycl::range<1>(N_STOCKS * batch_size), cgh);
-
-        // Usamos nd_range para tener control explícito sobre el grupo de trabajo
-        cgh.parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-            
-            int local_id = item.get_local_id(0);
-            int global_id = item.get_global_id(0);
-
-            // 2. CARGA COLABORATIVA (Global -> Local)
-            // Los 128 hilos cooperan para cargar toda la matriz de ticks del batch actual.
-            // Esto asegura que la lectura de memoria global sea coalesced (agrupada).
-            int total_elements = N_STOCKS * batch_size;
-            
-            for (int i = local_id; i < total_elements; i += WG_SIZE) {
-                int stock = i / batch_size;
-                int tick = i % batch_size;
-                
-                // Nota: d_ticks tiene un salto de N_TICKS entre acciones según tu función convert
-                local_ticks[stock * batch_size + tick] = d_ticks[stock * N_TICKS + tick];
-            }
-
-            // 3. BARRERA DE SINCRONIZACIÓN
-            // Esperar a que todos los hilos terminen de copiar a la memoria local antes de continuar
-            item.barrier();
-
-            // 4. CÁLCULO INTENSIVO (Usando memoria local)
-            // Solo procesamos los hilos reales (descartamos los 8 hilos extra de padding hasta 128)
-            if (global_id < N_PAIRS) {
-                FlatPairInfo pair = d_pairs[global_id];
-                const int pi = pair.i;
-                const int pj = pair.j;
-
-                for (int k = 0; k < batch_size; ++k) {
-                    
-                    // ¡Lectura ultrarrápida desde la memoria local!
-                    float x_i = local_ticks[pi * batch_size + k];
-                    float x_j = local_ticks[pj * batch_size + k];
-
-                    // Actualizar medias EMA
-                    float delta_i = x_i - pair.meanI;
-                    float delta_j = x_j - pair.meanJ;
-                    pair.meanI += ALPHA * delta_i;
-                    pair.meanJ += ALPHA * delta_j;
-
-                    // Varianza y covarianza
-                    pair.varJ  = (1.0f - ALPHA) * pair.varJ  + ALPHA * delta_j * delta_j;
-                    pair.covIJ = (1.0f - ALPHA) * pair.covIJ + ALPHA * delta_i * delta_j;
-
-                    float varJ_safe = sycl::max(pair.varJ, EPSILON);
-                    pair.beta = pair.covIJ / varJ_safe;
-
-                    // Spread y Z-Score
-                    float spread  = x_i - pair.beta * x_j;
-                    float delta_s = spread - pair.meanSpread;
-                    pair.meanSpread += ALPHA * delta_s;
-                    pair.varSpread   = (1.0f - ALPHA) * pair.varSpread + ALPHA * delta_s * delta_s;
-
-                    float stddev = sycl::sqrt(sycl::max(pair.varSpread, EPSILON));
-                    float z = delta_s / stddev;
-
-                    // Máquina de estados para trading
-                    if (pair.position == HOLD) {
-                        if      (z >  THRESHOLD_ENTRY) pair.position = SELL;
-                        else if (z < -THRESHOLD_ENTRY) pair.position = BUY;
-                    } else if (pair.position == BUY) {
-                        if (z > -THRESHOLD_EXIT) pair.position = HOLD;
-                    } else if (pair.position == SELL) {
-                        if (z <  THRESHOLD_EXIT) pair.position = HOLD;
+                    // Carga colaborativa coalesced (tick-major → tick-major)
+                    for (int t = (int)lid; t < total; t += (int)WG_SIZE) {
+                        tile[t] = d_ticks[(size_t)offset * N_STOCKS + t];
                     }
-                }
-                
-                // Escribir el estado final actualizado
-                d_pairs[global_id] = pair;
-            }
-        });
-    }).wait();
-} */
+                    it.barrier(sycl::access::fence_space::local_space);
 
+                    if (active) {
+                        const uint32_t pi = p.i;
+                        const uint32_t pj = p.j;
 
-void z_score_kernel(sycl::queue& Q, const float* d_ticks, FlatPairInfo* d_pairs, int batch_size) {
-    constexpr int WG_SIZE = 128; 
-    // Definimos el tamaño del bloque para no saturar la memoria local
-    constexpr int CHUNK_SIZE = 256; 
-    
-    sycl::range<1> global_size{WG_SIZE};
-    sycl::range<1> local_size{WG_SIZE};
+                        for (int k = 0; k < chunk; ++k) {
+                            const float xi = tile[k * N_STOCKS + pi];
+                            const float xj = tile[k * N_STOCKS + pj];
 
-    Q.submit([&](sycl::handler& cgh) {
-        
-        // 1. Memoria local ahora tiene un tamaño MÁXIMO FIJO y seguro
-        sycl::local_accessor<float, 1> local_ticks(sycl::range<1>(N_STOCKS * CHUNK_SIZE), cgh);
+                            const float di = xi - p.meanI;
+                            const float dj = xj - p.meanJ;
+                            p.meanI = sycl::fma(ALPHA, di, p.meanI);
+                            p.meanJ = sycl::fma(ALPHA, dj, p.meanJ);
 
-        cgh.parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-            int local_id = item.get_local_id(0);
-            int global_id = item.get_global_id(0);
+                            const float omA = 1.0f - ALPHA;
+                            p.varJ  = sycl::fma(omA, p.varJ,  ALPHA * dj * dj);
+                            p.covIJ = sycl::fma(omA, p.covIJ, ALPHA * di * dj);
 
-            // Cargamos el estado actual del par a los registros del hilo (memoria privada)
-            FlatPairInfo pair;
-            if (global_id < N_PAIRS) {
-                pair = d_pairs[global_id];
-            }
+                            const float varJ_safe = sycl::fmax(p.varJ, EPSILON);
+                            p.beta = p.covIJ / varJ_safe;
 
-            // ==========================================
-            // BUCLE EXTERNO: Procesamiento por bloques
-            // ==========================================
-            for (int offset = 0; offset < batch_size; offset += CHUNK_SIZE) {
-                
-                // Calculamos cuántos ticks quedan en este bloque (puede ser menor a CHUNK_SIZE al final)
-                int current_chunk_size = sycl::min(CHUNK_SIZE, batch_size - offset);
-                int total_elements = N_STOCKS * current_chunk_size;
+                            const float spread = sycl::fma(-p.beta, xj, xi);
+                            const float ds     = spread - p.meanSpread;
+                            p.meanSpread = sycl::fma(ALPHA, ds, p.meanSpread);
+                            p.varSpread  = sycl::fma(omA, p.varSpread, ALPHA * ds * ds);
 
-                // 2. CARGA COLABORATIVA DEL BLOQUE ACTUAL (Global -> Local)
-                for (int i = local_id; i < total_elements; i += WG_SIZE) {
-                    int stock = i / current_chunk_size;
-                    int tick = i % current_chunk_size;
-                    
-                    // Nota el desplazamiento (offset) en la memoria global
-                    local_ticks[stock * current_chunk_size + tick] = 
-                        d_ticks[stock * N_TICKS + (offset + tick)];
-                }
+                            const float stddev = sycl::sqrt(sycl::fmax(p.varSpread, EPSILON));
+                            const float z      = ds / stddev;
 
-                
-                item.barrier();
-
-                // 4. CÁLCULO INTENSIVO PARA EL BLOQUE ACTUAL
-                if (global_id < N_PAIRS) {
-                    const int pi = pair.i;
-                    const int pj = pair.j;
-
-                    for (int k = 0; k < current_chunk_size; ++k) {
-                        float x_i = local_ticks[pi * current_chunk_size + k];
-                        float x_j = local_ticks[pj * current_chunk_size + k];
-
-                         // Actualizar medias EMA
-                        float delta_i = x_i - pair.meanI;
-                        float delta_j = x_j - pair.meanJ;
-                        pair.meanI += ALPHA * delta_i;
-                        pair.meanJ += ALPHA * delta_j;
-
-                        // Varianza y covarianza
-                        pair.varJ  = (1.0f - ALPHA) * pair.varJ  + ALPHA * delta_j * delta_j;
-                        pair.covIJ = (1.0f - ALPHA) * pair.covIJ + ALPHA * delta_i * delta_j;
-
-                        float varJ_safe = sycl::max(pair.varJ, EPSILON);
-                        pair.beta = pair.covIJ / varJ_safe;
-
-                        // Spread y Z-Score
-                        float spread  = x_i - pair.beta * x_j;
-                        float delta_s = spread - pair.meanSpread;
-                        pair.meanSpread += ALPHA * delta_s;
-                        pair.varSpread   = (1.0f - ALPHA) * pair.varSpread + ALPHA * delta_s * delta_s;
-
-                        float stddev = sycl::sqrt(sycl::max(pair.varSpread, EPSILON));
-                        float z = delta_s / stddev;
-
-                        // Máquina de estados para trading
-                        if (pair.position == HOLD) {
-                            if      (z >  THRESHOLD_ENTRY) pair.position = SELL;
-                            else if (z < -THRESHOLD_ENTRY) pair.position = BUY;
-                        } else if (pair.position == BUY) {
-                            if (z > -THRESHOLD_EXIT) pair.position = HOLD;
-                        } else if (pair.position == SELL) {
-                            if (z <  THRESHOLD_EXIT) pair.position = HOLD;
+                            // Máquina de estados (compilador la convierte a select/predicate)
+                            if (p.position == HOLD) {
+                                if      (z >  THRESHOLD_ENTRY) p.position = SELL;
+                                else if (z < -THRESHOLD_ENTRY) p.position = BUY;
+                            } else if (p.position == BUY) {
+                                if (z > -THRESHOLD_EXIT) p.position = HOLD;
+                            } else { // SELL
+                                if (z <  THRESHOLD_EXIT) p.position = HOLD;
+                            }
                         }
                     }
+                    it.barrier(sycl::access::fence_space::local_space);
                 }
-                item.barrier();
-            }
-            // 6. Escribir el estado final actualizado de vuelta a memoria global
-            if (global_id < N_PAIRS) {
-                d_pairs[global_id] = pair;
-            }
-        });
-    }).wait();
+
+                if (active) d_pairs[gid] = p;
+            });
+    });
 }
 
 void runTicks(const std::vector<Tick> &ticks) {
-    //Implementación en GPU
-    /* std::array<Asset, N_STOCKS> assets;
-    std::array<std::array<PairInfo, N_STOCKS>, N_STOCKS> pairs;
-    int totalticks = ticks.size();
-    int size = 0;
+    const int total = static_cast<int>(ticks.size());
+        if (total < (int)WINDOW_SIZE) return;
 
-    convert(ticks, assets, 0, WINDOW_SIZE);
-    check_warmup_window(assets, pairs);
+        sycl::queue Q(sycl::gpu_selector_v,
+                    sycl::property::queue::in_order{});
 
-    for (int w = WINDOW_SIZE; w < totalticks; w+= N_TICKS){
-        size = std::min(int(N_TICKS), totalticks - w);
-        convert(ticks, assets, w, size);
-        //Parte paralelizable
-        z_score_batch(assets, pairs, size);
-        
-    } */
+        // 1) Buffers en device
+        float*         d_ticks = sycl::malloc_device<float>(
+                                    static_cast<size_t>(total) * N_STOCKS, Q);
+        FlatPairInfo*  d_pairs = sycl::malloc_device<FlatPairInfo>(N_PAIRS, Q);
 
-    std::array<Asset, N_STOCKS> assets;
-    std::array<std::array<PairInfo, N_STOCKS>, N_STOCKS> pairs;
-    int totalticks = ticks.size();
+        // 2) Una sola copia de TODOS los ticks (Tick ya es tick-major)
+        auto copy_ticks = Q.memcpy(d_ticks, ticks.data(),
+                                static_cast<size_t>(total) * sizeof(Tick));
 
-    // Preferir la GPU si está disponible
-    sycl::queue Q(sycl::gpu_selector_v);
+        // 3) Warm-up en CPU en paralelo a la copia
+        std::vector<FlatPairInfo> h_pairs(N_PAIRS);
+        warmup_cpu(ticks, h_pairs);
 
-    // 1. Usar malloc_shared: Memoria accesible por CPU y GPU sin memcpy
-    float* shared_ticks = sycl::malloc_shared<float>(N_STOCKS * N_TICKS, Q);
-    FlatPairInfo* shared_pairs = sycl::malloc_shared<FlatPairInfo>(N_PAIRS, Q);
+        // 4) Subir estado inicial de los pares y esperar a que los ticks estén
+        auto copy_pairs = Q.memcpy(d_pairs, h_pairs.data(),
+                                N_PAIRS * sizeof(FlatPairInfo));
+        copy_ticks.wait();
+        copy_pairs.wait();
 
-    // Warmup en CPU
-    convert(ticks, assets, 0, WINDOW_SIZE);      
-    check_warmup_window(assets, pairs);          
+        // 5) UN solo kernel para todos los ticks post-warm-up
+        const int n_post = total - (int)WINDOW_SIZE;
+        if (n_post > 0) {
+            z_score_kernel(Q,
+                        d_ticks + (size_t)WINDOW_SIZE * N_STOCKS,
+                        d_pairs,
+                        n_post).wait();
+        }
+
+        // 6) Bajar resultados
+        Q.memcpy(h_pairs.data(), d_pairs, N_PAIRS * sizeof(FlatPairInfo)).wait();
+
+        sycl::free(d_ticks, Q);
+        sycl::free(d_pairs, Q);
+
+        // h_pairs queda con el estado final; si necesitas el array 2D PairInfo,
+        // reconviértelo aquí leyendo p.i, p.j de cada elemento.
     
-    // La CPU escribe directamente en la memoria compartida
-    flatten_pairs(pairs, shared_pairs);               
-
-    for (int w = WINDOW_SIZE; w < totalticks; w += N_TICKS) {
-        int size = std::min((int)N_TICKS, totalticks - w);
-
-        // La CPU escribe los nuevos ticks directamente en la memoria compartida
-        convert(ticks, shared_ticks, w, size); 
-        
-        // ¡Magia! Ya no necesitas Q.memcpy(). Lanzamos el kernel directamente.
-        z_score_kernel(Q, shared_ticks, shared_pairs, size).wait();  
-    }
-
-    // La CPU lee directamente los resultados de la memoria compartida
-    unflatten_pairs(shared_pairs, pairs);
-
-    sycl::free(shared_ticks, Q);
-    sycl::free(shared_pairs, Q);
 
 }
 
