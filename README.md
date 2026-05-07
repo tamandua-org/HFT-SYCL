@@ -15,12 +15,32 @@ cmake .. \
 make
 ```
 
-### SYCL-FPGA version
+### SYCL-FPGA Emulator version
 ```bash
-mkdir build-fpga && cd build-fpga
+mkdir build-fpga-emu && cd build-fpga-emu
 cmake .. \
   -DCMAKE_TOOLCHAIN_FILE=../cmake/icpx-fpga.cmake \
-  -DUSE_FPGA=ON
+  -DUSE_FPGA=ON \
+  -DFPGA_MODE=emulator
+make
+```
+### SYCL-FPGA Simulator version
+```bash
+mkdir build-fpga-sim && cd build-fpga-sim
+cmake .. \
+  -DCMAKE_TOOLCHAIN_FILE=../cmake/icpx-fpga.cmake \
+  -DUSE_FPGA=ON \
+  -DFPGA_MODE=simulation
+make
+```
+
+### SYCL-FPGA HW Report version
+```bash
+mkdir build-fpga-report && cd build-fpga-report
+cmake .. \
+  -DCMAKE_TOOLCHAIN_FILE=../cmake/icpx-fpga.cmake \
+  -DUSE_FPGA=ON \
+  -DFPGA_MODE=report
 make
 ```
 
