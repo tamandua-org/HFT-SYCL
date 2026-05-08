@@ -46,13 +46,18 @@ make
 
 **Aún no se ha testeado nada** 
 
-Se han analizado los repos de trisycl (https://github.com/trisycl/trisycl) y oneAPI DPC++ (https://github.com/intel/llvm) compiler de Intel
 
-En principio si sería posible utilizar oneAPI FPGA para la PYNQ-Z2 siguiendo los siguientes pasos:
+Repositorios y links a tener en cuenta para usar SYCL en el ecosistema Xilinx:
+- trisycl (https://github.com/trisycl/trisycl) 
+- Intel oneAPI DPC++ (https://github.com/intel/llvm)
+- XRT (https://xilinx.github.io/XRT/2024.2/html/platforms.html)
 
-Habría que usar Intel oneAPI DPC++ compiler combiando con un Xilinx/AMD FPGA Support Package (mirar https://github.com/codeplaysoftware/deploy-oneapi). Esto último se trata de unos plugins que nos permitiría correr onAPI en NVIDA (CUDA) y hardware AMD.
+Al final no parace posible que se pueda utilizar SYCL para la PYNQ-Z2, ya que XRT no le da soporte (solo se lo da a ZYNQ-7000, ZYNQ Ultrascale+ MPSoC y  Versal ACAP)
 
-Para la implementación, el ARM de la pynq no sería capaz de compilarlo, por lo que nos haría falta configurar un cross-compiler.
+Para la implementación, el chip de la FPGA no sería suficiente para compilar, por lo que nos haría falta configurar un cross-compiler desde otra maquina. Luego cargar el bitstream y el ejecutable en un sd a la FPGA.
+
+Alternativa de alto nivel para desarrollo en FPGA en el ecosistema Xilinx sería utilizar Vitis HLS.
+
 
 
 Nota: trisycl lleva sin recibir actualizaciones significativas desde finales de 2023.
