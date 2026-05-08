@@ -12,3 +12,6 @@ constexpr float THRESHOLD_EXIT = 0.5f;
 constexpr uint8_t HOLD = 0;
 constexpr uint8_t BUY = 1;
 constexpr uint8_t SELL = 2;
+
+const int WARMUP_ITERATIONS = 20;
+const int ITERATIONS = 200;

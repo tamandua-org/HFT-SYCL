@@ -10,6 +10,7 @@
 #include <ranges>
 #include <string>
 #include <vector>
+#include <chrono>
 
 void readAsset(std::vector<float> &prices, const std::string &filename) {
   std::ifstream file(filename);
@@ -76,11 +77,35 @@ int main() {
 
   auto ticks = buildTicks(assets, stockNames);
 
-  auto positions = runTicks(ticks);
+  std::array<uint8_t, N_STOCKS> positions;
+
+  for(int i = 0; i < WARMUP_ITERATIONS; i++){
+    auto warmup_positions = runTicks(ticks);
+  }
+  std::cout << '\n' << "Se han realizado " << WARMUP_ITERATIONS << " iteraciones de warmup\n";
+
+  
+  std::cout << '\n' << "Iniciando benchmark con " << ITERATIONS << " iteraciones\n\n";
+
+  std::chrono::duration<double, std::milli> totalDuration = std::chrono::duration<double, std::milli>::zero();
+  for(int i = 0 ; i < ITERATIONS ; i++){
+
+    auto start = std::chrono::high_resolution_clock::now();
+    positions = runTicks(ticks);
+    auto end = std::chrono::high_resolution_clock::now();
+
+    std::chrono::duration<double, std::milli> iterationDuration = end - start;
+    //std::cout << "Iteración " << i+1 << " ha tardado " << iterationDuration << " ms\n";
+    totalDuration += iterationDuration;
+  }
 
   for (const auto &[stock, pos] : std::views::zip(stockNames, positions)) {
     std::cout << stock << " " << (int)pos << '\n';
   }
+
+  std::cout << '\n' << "Se ha tardado " << (totalDuration.count()/ITERATIONS) << " ms de media para cada iteración\n";
+  std::cout << "Con un total de " << totalDuration.count() << " ms para " << ITERATIONS << " iteraciones\n";
+
 
   return 0;
 }
