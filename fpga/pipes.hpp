@@ -22,7 +22,6 @@ constexpr int PAIR_IDX(int i, int j) {
   return i * N_STOCKS - i * (i + 1) / 2 + (j - i - 1);
 }
 
-
 class PairSignalPipeID;
 class TickInPipeID;
 

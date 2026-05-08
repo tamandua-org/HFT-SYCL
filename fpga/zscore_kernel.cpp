@@ -5,7 +5,7 @@
 
 // Position state machine — same logic as base_impl choosePosition.
 [[sycl::reqd_work_group_size(1, 1, 1)]]
-inline void choosePosition_device(int8_t &position, const float z) {
+inline void choosePosition_device(int8_t position, const float z) {
   if (position == static_cast<int8_t>(HOLD)) {
     if (z > THRESHOLD_ENTRY)
       position = static_cast<int8_t>(SELL);
@@ -22,27 +22,31 @@ inline void choosePosition_device(int8_t &position, const float z) {
 
 class ZScoreKernel;
 
+// flow: we obtain values from cpu -> launch 2 fors on i -> 
+// each j for is launched with II = 1 -> position is chosen for each pair ->
+// we prepare the data to send it to the voting pipe -> send data through pipe (this sends 1 complete tick data)
 inline sycl::event submitZScoreKernel(sycl::queue &q) {
   return q.submit([&](sycl::handler &h) {
     h.single_task<ZScoreKernel>([=]() {
       [[intel::fpga_memory]]
       PairInfo pairState[N_STOCKS][N_STOCKS];
 
-#pragma unroll
+
       for (int i = 0; i < static_cast<int>(N_STOCKS); i++)
 #pragma unroll
         for (int j = 0; j < static_cast<int>(N_STOCKS); j++)
           pairState[i][j] = PairInfo{};
 
-      [[intel::fpga_register]] uint32_t tickCount = 1;
+      [[intel::fpga_register]] uint32_t tickCount = 1; // all the unrolled items have a tickCount, we hint it to create a register
 
       while (true) {
 
-        const TickPayload pkt = TickInPipe::read();
+        const TickPayload pkt = TickInPipe::read(); 
 
-        for (int i = 0; i < static_cast<int>(N_STOCKS); i++) {
+#pragma unroll 2 //we divide this into two parallel pipelines for double throughput (we are limited by memory access here)
+        for (int i = 0; i < static_cast<int>(N_STOCKS); i++) { 
 
-          [[intel::initiation_interval(1)]]
+          [[intel::initiation_interval(1)]] //we launch a pipeline with II = 1 meaning we every cicle every part of the pipeline is being used (we are limited by memory access here)
           for (int j = i + 1; j < static_cast<int>(N_STOCKS); j++) {
 
             PairInfo &pair = pairState[i][j];
@@ -96,9 +100,9 @@ inline sycl::event submitZScoreKernel(sycl::queue &q) {
           }
         }
 
-        // Pack upper triangle into flat payload for VotingKernel.
+        // Pack upper triangle into flat payload for voting kernel.
         PairSignalPayload out{};
-#pragma unroll
+
         for (int i = 0; i < static_cast<int>(N_STOCKS); i++)
 #pragma unroll
           for (int j = i + 1; j < static_cast<int>(N_STOCKS); j++)
