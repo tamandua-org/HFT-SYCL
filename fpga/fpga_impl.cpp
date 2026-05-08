@@ -35,9 +35,7 @@ inline sycl::queue makeFPGAQueue() {
 }
 
 std::array<uint8_t, N_STOCKS> runTicks(const std::vector<Tick> &ticks) {
-    std::cout << "selector prechoose";
     sycl::queue q = makeFPGAQueue();
-    std::cout << "selector chosen";
 
     uint8_t *d_positions = sycl::malloc_shared<uint8_t>(N_STOCKS, q);
     for (int i = 0; i < static_cast<int>(N_STOCKS); i++)
@@ -53,7 +51,7 @@ std::array<uint8_t, N_STOCKS> runTicks(const std::vector<Tick> &ticks) {
         for (int s = 0; s < N_STOCKS; s++) //esto puede optimizarse con un memcpy
             tickI.prices[s] = ticks[t].prices[s];
         tickI.last = (t == nTicks - 1);
-        TickInPipe::write(q, tickI); //simulate the tick arriving to the fpga by sending 1 by 1
+        TickInPipe::write(q, tickI); //simulate the tick arriving to the fpga by sending 1 by 1 (this pipe is read by zscore kernel)
     }
 
     zscore_evt.wait();

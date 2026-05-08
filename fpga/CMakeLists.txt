@@ -24,11 +24,11 @@ elseif(FPGA_MODE STREQUAL "simulation")
 
 elseif(FPGA_MODE STREQUAL "report")
     message(STATUS "FPGA mode: REPORT")
-    list(APPEND FPGA_FLAGS -Xshardware -fsycl-link=early) 
+    list(APPEND FPGA_FLAGS -DFPGA_HARDWARE) 
 
 elseif(FPGA_MODE STREQUAL "hardware")
     message(STATUS "FPGA mode: HARDWARE")
-    list(APPEND FPGA_FLAGS -Xshardware) 
+    list(APPEND FPGA_FLAGS -DFPGA_HARDWARE -Xshardware) 
 
 else()
     message(FATAL_ERROR "Unknown FPGA_MODE: ${FPGA_MODE}")
